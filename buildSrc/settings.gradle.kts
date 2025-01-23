@@ -5,10 +5,14 @@
  */
 
 dependencyResolutionManagement {
-    // Reuse version catalog from the main build.
-    versionCatalogs {
-        create("libs", { from(files("../gradle/libs.versions.toml")) })
-    }
+  // Reuse version catalog from the main build.
+  versionCatalogs { create("libs", { from(files("../gradle/libs.versions.toml")) }) }
+}
+
+pluginManagement {
+  val spotlessVersion: String by settings
+
+  plugins { id("com.diffplug.spotless") version spotlessVersion }
 }
 
 rootProject.name = "buildSrc"

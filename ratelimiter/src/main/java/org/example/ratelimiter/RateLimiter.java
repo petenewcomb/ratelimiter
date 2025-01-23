@@ -1,4 +1,3 @@
 package org.example.ratelimiter;
 
-public class RateLimiter {
-}
+public class RateLimiter {}
