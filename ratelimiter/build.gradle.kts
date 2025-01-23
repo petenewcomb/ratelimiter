@@ -5,3 +5,7 @@
 plugins {
     id("buildlogic.java-library-conventions")
 }
+
+dependencies {
+    implementation("com.github.ben-manes.caffeine:caffeine:3.2.0")
+}

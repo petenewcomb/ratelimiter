@@ -33,11 +33,11 @@ public class Server {
             Map.entry("erin@example.com", 10000.0));
 
     final RateLimiter limiter =
-        new RateLimiter(
-            System::nanoTime,
-            burstIntervalNanos,
-            (double) Duration.ofSeconds(1).getNano(),
-            rateLimitPerSecondByAccountId::get);
+        RateLimiter.newBuilder()
+            .setMonotonicClock(System::nanoTime, Duration.ofNanos(1))
+            .setBurstInterval(burstIntervalNanos)
+            .setQuotaInterval(Duration.ofSeconds(1))
+            .build(rateLimitPerSecondByAccountId::get));
 
     final DisposableServer server =
         HttpServer.create()
