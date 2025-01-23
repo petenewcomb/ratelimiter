@@ -11,4 +11,4 @@ plugins {
 }
 
 rootProject.name = "ratelimiter"
-include("app", "list", "utilities")
+include("server", "ratelimiter")
