@@ -15,10 +15,13 @@ public class Server {
   public static void main(final String[] args) {
 
     // Configuration that should be made external
-    final String host = "localhost";
-    final int port = 8080;
+    final var host = "localhost";
+    final var port = 8080;
 
-    final long burstIntervalNanos = Duration.ofSeconds(10).getNano();
+    final var burstWindowDuration = Duration.ofSeconds(1);
+    final var quotaWindowDuration = Duration.ofSeconds(1);
+    final var failsafeQuota = 1000.0;
+    final var invalidAccountQuota = 0.0;
 
     // This should be in an external database
     final Map<String, Double> rateLimitPerSecondByAccountId =
@@ -32,14 +35,17 @@ public class Server {
             Map.entry("dan@example.com", 1000.0),
             Map.entry("erin@example.com", 10000.0));
 
-    final RateLimiter limiter =
+    final var limiter =
         RateLimiter.newBuilder()
             .setMonotonicClock(System::nanoTime, Duration.ofNanos(1))
-            .setBurstInterval(burstIntervalNanos)
-            .setQuotaInterval(Duration.ofSeconds(1))
-            .build(rateLimitPerSecondByAccountId::get));
+            .setBurstWindowDuration(burstWindowDuration)
+            .setQuotaWindowDuration(quotaWindowDuration)
+            .setFailsafeQuota(10000.0)
+            .build(quotaId -> Mono.just(rateLimitPerSecondByAccountId.getOrDefault(quotaId, invalidAccountQuota))
+//                   .delayElement(Duration.ofMillis(10)) // simulate fetch latency
+                   .toFuture());
 
-    final DisposableServer server =
+    final var server =
         HttpServer.create()
             .host(host)
             .port(port)
@@ -59,7 +65,7 @@ public class Server {
     // production code it should be verified by or embedded into a
     // token with a digital signature valid for a limited time -- for
     // example a JWT (https://jwt.io/).
-    final String accountId = request.requestHeaders().get("x-account-id", "ANONYMOUS");
+    final var accountId = request.requestHeaders().get("x-account-id", "ANONYMOUS");
 
     if (!limiter.acquirePermit(accountId)) {
       response.status(HttpResponseStatus.TOO_MANY_REQUESTS);
