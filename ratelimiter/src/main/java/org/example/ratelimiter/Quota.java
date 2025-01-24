@@ -13,9 +13,7 @@ class Quota {
   
   Quota(final String quotaId, final State state, final RateLimiter limiter) {
     this.value = limiter.failsafeQuota;
-    System.out.printf("starting fetch for %s\n", quotaId);
     fetch(quotaId, state, limiter);
-    System.out.printf("first fetch for %s started\n", quotaId);
   }
 
   double get(final String quotaId, final long currentTick, final State state, final RateLimiter limiter) {
@@ -56,6 +54,5 @@ class Quota {
       this.value = value;
       state.quotaUpdated(quotaId, value, limiter);
     }
-    System.out.printf("quota for %s is %f\n", quotaId, value);
   }
 }

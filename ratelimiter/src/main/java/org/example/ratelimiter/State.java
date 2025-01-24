@@ -91,9 +91,7 @@ class State {
   }
 
   private static long calculateAverageTicksPerPermit(final double quota, final RateLimiter limiter) {
-    final var value = (long) Math.ceil((double) limiter.quotaWindowTicks / quota);
-    System.out.printf("calculateAverageTicksPerPermit quota = %s; value = %s\n", quota, value);
-    return value;
+    return (long) Math.ceil((double) limiter.quotaWindowTicks / quota);
   }
 
   void quotaUpdated(final String id, final double quota, final RateLimiter limiter) {
