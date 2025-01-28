@@ -30,6 +30,7 @@ public class RateLimiter {
     Duration tickDuration = Duration.ofNanos(1);
     Duration burstWindowDuration = Duration.ofSeconds(1);
     Duration maxRetentionDuration = Duration.ofMinutes(1);
+    long maxRetentionCount = Long.MAX_VALUE;
     Duration quotaWindowDuration = Duration.ofSeconds(1);
     Duration quotaRefreshPeriod = Duration.ofMinutes(1);
     double failsafeQuota = 1.0;
@@ -52,6 +53,11 @@ public class RateLimiter {
 
     public Builder setMaxRetentionDuration(final Duration value) {
       this.maxRetentionDuration = Objects.requireNonNull(value);
+      return this;
+    }
+
+    public Builder setMaxRetentionCount(final long value) {
+      this.maxRetentionCount = value;
       return this;
     }
 
@@ -106,6 +112,7 @@ public class RateLimiter {
     this.cache = Caffeine.newBuilder()
         .ticker(currentTickSupplier::get)
         .expireAfter(Expiry.accessing(this::getEntryRetentionPeriod))
+        .maximumSize(builder.maxRetentionCount)
         .build();
   }
 
@@ -116,7 +123,7 @@ public class RateLimiter {
   }
 
   private Duration getEntryRetentionPeriod(final String quotaId, final State state) {
-    return tickDuration.multipliedBy(state.getRetentionTicks(quotaId, this));
+    return tickDuration.multipliedBy(state.getRetentionTicks());
   }
 
   void updateRetention(final String quotaId) {

@@ -11,4 +11,5 @@ dependencies {
 
 application {
     mainClass = "org.example.server.Server"
+    applicationDefaultJvmArgs = listOf("-Xmx256m")
 }

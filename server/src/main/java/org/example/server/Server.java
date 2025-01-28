@@ -10,6 +10,7 @@ import reactor.netty.NettyOutbound;
 import reactor.netty.http.server.HttpServer;
 import reactor.netty.http.server.HttpServerRequest;
 import reactor.netty.http.server.HttpServerResponse;
+import reactor.netty.resources.LoopResources;
 
 public class Server {
   public static void main(final String[] args) {
@@ -33,22 +34,27 @@ public class Server {
             Map.entry("chuck@example.com", 10.0),
             Map.entry("craig@example.com", 100.0),
             Map.entry("dan@example.com", 1000.0),
-            Map.entry("erin@example.com", 10000.0));
+            Map.entry("erin@example.com", 10000.0),
+            Map.entry("eve@example.com", 100000.0));
 
     final var limiter =
         RateLimiter.newBuilder()
             .setMonotonicClock(System::nanoTime, Duration.ofNanos(1))
+            .setMaxRetentionCount(100000)
             .setBurstWindowDuration(burstWindowDuration)
             .setQuotaWindowDuration(quotaWindowDuration)
             .setFailsafeQuota(10000.0)
             .build(quotaId -> Mono.just(rateLimitPerSecondByAccountId.getOrDefault(quotaId, invalidAccountQuota))
-//                   .delayElement(Duration.ofMillis(10)) // simulate fetch latency
+                   .delayElement(Duration.ofMillis(10)) // simulate fetch latency
                    .toFuture());
+
+    final var loopResources = LoopResources.create("event-loop", 5, true);
 
     final var server =
         HttpServer.create()
             .host(host)
             .port(port)
+            .runOn(loopResources)
             .handle((request, response) -> handle(limiter, request, response))
             .bindNow();
 
@@ -66,8 +72,7 @@ public class Server {
     // token with a digital signature valid for a limited time -- for
     // example a JWT (https://jwt.io/).
     final var accountId = request.requestHeaders().get("x-account-id", "ANONYMOUS");
-
-    if (!limiter.acquirePermit(accountId)) {
+    if (!accountId.equals("admin@example.com") && !limiter.acquirePermit(accountId)) {
       response.status(HttpResponseStatus.TOO_MANY_REQUESTS);
       return response.sendString(Mono.just("Exceeded quota"));
     }

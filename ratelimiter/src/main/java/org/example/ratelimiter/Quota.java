@@ -10,7 +10,7 @@ class Quota {
   private volatile double value;
   private volatile long lastFetchStartTick = Long.MIN_VALUE;
   private boolean fetchInProgress;
-  
+
   Quota(final String quotaId, final State state, final RateLimiter limiter) {
     this.value = limiter.failsafeQuota;
     fetch(quotaId, state, limiter);

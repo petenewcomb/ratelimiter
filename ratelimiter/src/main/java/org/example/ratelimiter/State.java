@@ -12,14 +12,17 @@ class State {
   private final long originTick;
   private final Quota quota;
   private final AtomicLong availablePermits = new AtomicLong();
+  private volatile long permitsForBurstWindow;
   private volatile long burstWindowEndTick;
   private volatile long retentionTicks;
 
   State(final String quotaId, final long currentTick, final RateLimiter limiter) {
     this.originTick = currentTick;
     this.quota = new Quota(quotaId, this, limiter);
-    setBurstWindowValues(quotaId, currentTick, limiter);
-    this.retentionTicks = calculateRetentionTicks(quota.get(quotaId, currentTick, this, limiter), limiter);
+
+    final var quota = this.quota.get(quotaId, currentTick, this, limiter);
+    setBurstWindowValues(quota, currentTick, 0, limiter);
+    this.retentionTicks = calculateRetentionTicks(quota, limiter);
   }
 
   boolean acquirePermit(final String quotaId, final long currentTick, final RateLimiter limiter) {
@@ -39,19 +42,17 @@ class State {
       // Another thread must have updated the window while this one was waiting for the lock
       return;
     }
-    setBurstWindowValues(quotaId, currentTick, limiter);
+    final var quota = this.quota.get(quotaId, currentTick, this, limiter);
+    setBurstWindowValues(quota, currentTick, 0, limiter);
   }
 
-  private void setBurstWindowValues(final String quotaId, final long currentTick, final RateLimiter limiter) {
+  private void setBurstWindowValues(final double quota, final long currentTick, final long baselinePermits, final RateLimiter limiter) {
     // Save these to ensure we use consistent values through the calculations
-    final var quota = this.quota.get(quotaId, currentTick, this, limiter);
-
     final var burstWindowTicks = limiter.burstWindowTicks;  // In case it ends up not being final
     final var burstWindowIndex = (currentTick - originTick) / burstWindowTicks;
 
-    final long permitsForWindow;
     if (quota <= 0) {
-      permitsForWindow = 0;
+      permitsForBurstWindow = 0;
     } else {
       // Start with an window number that will yield at least one
       // permit. Without this, if the quota allows for only a fractional
@@ -63,9 +64,13 @@ class State {
       // Using the difference between successive windows ensures that
       // fractional quotas will be meeted out properly, even if that
       // means that some burst windows get no permits.
-      permitsForWindow = (long) (quota * (double) burstWindowNumber) - (long) (quota * (double) (burstWindowNumber-1));
+      permitsForBurstWindow = (long) (quota * (double) burstWindowNumber) - (long) (quota * (double) (burstWindowNumber-1));
     }
-    availablePermits.set(permitsForWindow);
+    if (baselinePermits == 0) {
+      availablePermits.set(permitsForBurstWindow);
+    } else {
+      availablePermits.addAndGet(permitsForBurstWindow - baselinePermits);
+    }
 
     // Set this only after availablePermits is updated so that
     // acquirePermit() continues to block on updateBurstWindow()
@@ -73,7 +78,7 @@ class State {
     burstWindowEndTick = originTick + (burstWindowIndex + 1) * burstWindowTicks;
   }
 
-  long getRetentionTicks(final String quotaId, final RateLimiter limiter) {
+  long getRetentionTicks() {
     return retentionTicks;
   }
 
@@ -94,9 +99,12 @@ class State {
     return (long) Math.ceil((double) limiter.quotaWindowTicks / quota);
   }
 
-  void quotaUpdated(final String id, final double quota, final RateLimiter limiter) {
+  void quotaUpdated(final String quotaId, final double quota, final RateLimiter limiter) {
     retentionTicks = calculateRetentionTicks(quota, limiter);
-    // TODO: consider recalculating permits for the current burst window?
-    limiter.updateRetention(id);
+    limiter.updateRetention(quotaId);
+    synchronized (this) {
+      // Adjust permits for current burst window
+      setBurstWindowValues(quota, limiter.currentTickSupplier.get(), permitsForBurstWindow, limiter);
+    }
   }
 }
