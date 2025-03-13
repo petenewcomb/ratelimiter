@@ -8,4 +8,5 @@ plugins {
 
 dependencies {
     implementation("com.github.ben-manes.caffeine:caffeine:3.2.0")
+    testImplementation("org.openjdk.jol:jol-core:0.17")
 }

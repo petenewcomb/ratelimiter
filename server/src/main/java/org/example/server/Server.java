@@ -5,7 +5,6 @@ import java.time.Duration;
 import java.util.Map;
 import org.example.ratelimiter.RateLimiter;
 import reactor.core.publisher.Mono;
-import reactor.netty.DisposableServer;
 import reactor.netty.NettyOutbound;
 import reactor.netty.http.server.HttpServer;
 import reactor.netty.http.server.HttpServerRequest;
@@ -21,7 +20,7 @@ public class Server {
 
     final var burstWindowDuration = Duration.ofSeconds(1);
     final var quotaWindowDuration = Duration.ofSeconds(1);
-    final var failsafeQuota = 1000.0;
+    final var failsafeQuota = 1_000.0;
     final var invalidAccountQuota = 0.0;
 
     // This should be in an external database
@@ -33,20 +32,24 @@ public class Server {
             Map.entry("carol@example.com", 2.0),
             Map.entry("chuck@example.com", 10.0),
             Map.entry("craig@example.com", 100.0),
-            Map.entry("dan@example.com", 1000.0),
-            Map.entry("erin@example.com", 10000.0),
-            Map.entry("eve@example.com", 100000.0));
+            Map.entry("dan@example.com", 1_000.0),
+            Map.entry("erin@example.com", 10_000.0),
+            Map.entry("eve@example.com", 100_000.0));
 
     final var limiter =
         RateLimiter.newBuilder()
             .setMonotonicClock(System::nanoTime, Duration.ofNanos(1))
-            .setMaxRetentionCount(100000)
+            .setMaxRetentionCount(100_000)
             .setBurstWindowDuration(burstWindowDuration)
             .setQuotaWindowDuration(quotaWindowDuration)
-            .setFailsafeQuota(10000.0)
-            .build(quotaId -> Mono.just(rateLimitPerSecondByAccountId.getOrDefault(quotaId, invalidAccountQuota))
-                   .delayElement(Duration.ofMillis(10)) // simulate fetch latency
-                   .toFuture());
+            .setFailsafeQuota(10_000.0)
+            .build(
+                quotaId ->
+                    Mono.just(
+                            rateLimitPerSecondByAccountId.getOrDefault(
+                                quotaId, invalidAccountQuota))
+                        .delayElement(Duration.ofMillis(10)) // simulate fetch latency
+                        .toFuture());
 
     final var loopResources = LoopResources.create("event-loop", 5, true);
 

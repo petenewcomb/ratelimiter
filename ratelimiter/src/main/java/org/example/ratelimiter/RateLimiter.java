@@ -1,14 +1,14 @@
 package org.example.ratelimiter;
 
-import java.util.function.Function;
-import java.util.function.Supplier;
-import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Expiry;
+import java.time.Duration;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BiConsumer;
-import java.util.Objects;
-import java.time.Duration;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 public class RateLimiter {
 
@@ -30,17 +30,22 @@ public class RateLimiter {
     Duration tickDuration = Duration.ofNanos(1);
     Duration burstWindowDuration = Duration.ofSeconds(1);
     Duration maxRetentionDuration = Duration.ofMinutes(1);
-    long maxRetentionCount = Long.MAX_VALUE;
+    long maxRetentionCount = 100_000; // Default to a reasonable value
     Duration quotaWindowDuration = Duration.ofSeconds(1);
     Duration quotaRefreshPeriod = Duration.ofMinutes(1);
     double failsafeQuota = 1.0;
-    BiConsumer<String, Throwable> quotaFetchErrorRecorder = (id, e) -> {
-      throw new RuntimeException("Unhandled quota fetch error; please fix bug or supply a handler to RateLimiter.Builder.setQuotaFetchErrorRecorder: " + e.getMessage(), e);
-    };
+    BiConsumer<String, Throwable> quotaFetchErrorRecorder =
+        (id, e) -> {
+          throw new RuntimeException(
+              "Unhandled quota fetch error; please fix bug or supply a handler to RateLimiter.Builder.setQuotaFetchErrorRecorder: "
+                  + e.getMessage(),
+              e);
+        };
 
     Builder() {}
 
-    public Builder setMonotonicClock(final Supplier<Long> currentTickSupplier, final Duration tickDuration) {
+    public Builder setMonotonicClock(
+        final Supplier<Long> currentTickSupplier, final Duration tickDuration) {
       this.currentTickSupplier = Objects.requireNonNull(currentTickSupplier);
       this.tickDuration = Objects.requireNonNull(tickDuration);
       return this;
@@ -98,27 +103,30 @@ public class RateLimiter {
   }
 
   RateLimiter(
-      final Builder builder,
-      final Function<String, CompletableFuture<Double>> getQuotaById) {
+      final Builder builder, final Function<String, CompletableFuture<Double>> getQuotaById) {
     this.currentTickSupplier = builder.currentTickSupplier;
     this.tickDuration = builder.tickDuration;
     this.burstWindowTicks = builder.burstWindowDuration.toNanos() / builder.tickDuration.toNanos();
-    this.maxRetentionTicks = builder.maxRetentionDuration.toNanos() / builder.tickDuration.toNanos();
+    this.maxRetentionTicks =
+        builder.maxRetentionDuration.toNanos() / builder.tickDuration.toNanos();
     this.quotaWindowTicks = builder.quotaWindowDuration.toNanos() / builder.tickDuration.toNanos();
-    this.quotaRefreshPeriodTicks = builder.quotaRefreshPeriod.toNanos() / builder.tickDuration.toNanos();
+    this.quotaRefreshPeriodTicks =
+        builder.quotaRefreshPeriod.toNanos() / builder.tickDuration.toNanos();
     this.failsafeQuota = builder.failsafeQuota;
     this.quotaFetchErrorRecorder = builder.quotaFetchErrorRecorder;
     this.getQuotaById = getQuotaById;
-    this.cache = Caffeine.newBuilder()
-        .ticker(currentTickSupplier::get)
-        .expireAfter(Expiry.accessing(this::getEntryRetentionPeriod))
-        .maximumSize(builder.maxRetentionCount)
-        .build();
+    this.cache =
+        Caffeine.newBuilder()
+            .ticker(currentTickSupplier::get)
+            .expireAfter(Expiry.accessing(this::getEntryRetentionPeriod))
+            .maximumSize(builder.maxRetentionCount)
+            .build();
   }
 
   public boolean acquirePermit(final String quotaId) {
     final long currentTick = currentTickSupplier.get();
-    return cache.get(quotaId, id -> new State(id, currentTick, this))
+    return cache
+        .get(quotaId, id -> new State(id, currentTick, this))
         .acquirePermit(quotaId, currentTick, this);
   }
 
