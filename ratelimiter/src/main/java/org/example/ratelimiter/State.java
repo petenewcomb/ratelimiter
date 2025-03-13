@@ -1,28 +1,31 @@
 package org.example.ratelimiter;
 
-import java.util.function.Function;
-import java.util.function.Supplier;
-import com.github.benmanes.caffeine.cache.Caffeine;
-import com.github.benmanes.caffeine.cache.Cache;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicLong;
-import java.time.Duration;
+import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 
-class State {
+// Extend rather than contain Quota to avoid additional object memory overhead
+class State extends Quota {
   private final long originTick;
-  private final Quota quota;
-  private final AtomicLong availablePermits = new AtomicLong();
+
+  // Use AtomicLongFieldUpdater to avoid the object memory overhead of AtomicLong
+  private volatile long availablePermits;
+  private static final AtomicLongFieldUpdater<State> AVAILABLE_PERMITS_UPDATER =
+      AtomicLongFieldUpdater.newUpdater(State.class, "availablePermits");
+
   private volatile long permitsForBurstWindow;
   private volatile long burstWindowEndTick;
   private volatile long retentionTicks;
 
   State(final String quotaId, final long currentTick, final RateLimiter limiter) {
+    super();
     this.originTick = currentTick;
-    this.quota = new Quota(quotaId, this, limiter);
 
-    final var quota = this.quota.get(quotaId, currentTick, this, limiter);
-    setBurstWindowValues(quota, currentTick, 0, limiter);
-    this.retentionTicks = calculateRetentionTicks(quota, limiter);
+    // Initialize quota fetching before getting initial quota value in case the
+    // fetch is synchronous.
+    initializeQuota(quotaId, this, limiter);
+
+    final var quotaValue = getQuota(quotaId, currentTick, this, limiter);
+    setBurstWindowValues(quotaValue, currentTick, 0, limiter);
+    this.retentionTicks = calculateRetentionTicks(quotaValue, limiter);
   }
 
   boolean acquirePermit(final String quotaId, final long currentTick, final RateLimiter limiter) {
@@ -33,22 +36,27 @@ class State {
   }
 
   private boolean acquirePermitFast() {
-    var remainingPermits = availablePermits.decrementAndGet();
+    var remainingPermits = AVAILABLE_PERMITS_UPDATER.decrementAndGet(this);
     return remainingPermits >= 0;
   }
 
-  private synchronized void updateBurstWindow(final String quotaId, final long currentTick, final RateLimiter limiter) {
+  private synchronized void updateBurstWindow(
+      final String quotaId, final long currentTick, final RateLimiter limiter) {
     if (currentTick < burstWindowEndTick) {
       // Another thread must have updated the window while this one was waiting for the lock
       return;
     }
-    final var quota = this.quota.get(quotaId, currentTick, this, limiter);
+    final var quota = getQuota(quotaId, currentTick, this, limiter);
     setBurstWindowValues(quota, currentTick, 0, limiter);
   }
 
-  private void setBurstWindowValues(final double quota, final long currentTick, final long baselinePermits, final RateLimiter limiter) {
+  private void setBurstWindowValues(
+      final double quota,
+      final long currentTick,
+      final long baselinePermits,
+      final RateLimiter limiter) {
     // Save these to ensure we use consistent values through the calculations
-    final var burstWindowTicks = limiter.burstWindowTicks;  // In case it ends up not being final
+    final var burstWindowTicks = limiter.burstWindowTicks; // In case it ends up not being final
     final var burstWindowIndex = (currentTick - originTick) / burstWindowTicks;
 
     if (quota <= 0) {
@@ -58,18 +66,21 @@ class State {
       // permit. Without this, if the quota allows for only a fractional
       // permit per burst window, the first request to acquire a
       // permit through a given State object will always fail.
-      final var firstBurstWindowNumber = 1 + calculateAverageTicksPerPermit(quota, limiter) / burstWindowTicks;
+      final var firstBurstWindowNumber =
+          1 + calculateAverageTicksPerPermit(quota, limiter) / burstWindowTicks;
       final var burstWindowNumber = firstBurstWindowNumber + burstWindowIndex;
 
       // Using the difference between successive windows ensures that
       // fractional quotas will be meeted out properly, even if that
       // means that some burst windows get no permits.
-      permitsForBurstWindow = (long) (quota * (double) burstWindowNumber) - (long) (quota * (double) (burstWindowNumber-1));
+      permitsForBurstWindow =
+          (long) (quota * (double) burstWindowNumber)
+              - (long) (quota * (double) (burstWindowNumber - 1));
     }
     if (baselinePermits == 0) {
-      availablePermits.set(permitsForBurstWindow);
+      AVAILABLE_PERMITS_UPDATER.set(this, permitsForBurstWindow);
     } else {
-      availablePermits.addAndGet(permitsForBurstWindow - baselinePermits);
+      AVAILABLE_PERMITS_UPDATER.addAndGet(this, permitsForBurstWindow - baselinePermits);
     }
 
     // Set this only after availablePermits is updated so that
@@ -90,12 +101,14 @@ class State {
     // Retain for at least one burst window or as long as it takes for one permit to be available.
     return Long.min(
         limiter.maxRetentionTicks,
-        Long.max(
-            limiter.burstWindowTicks,
-            calculateAverageTicksPerPermit(quota, limiter)));
+        Long.max(limiter.burstWindowTicks, calculateAverageTicksPerPermit(quota, limiter)));
   }
 
-  private static long calculateAverageTicksPerPermit(final double quota, final RateLimiter limiter) {
+  private static long calculateAverageTicksPerPermit(
+      final double quota, final RateLimiter limiter) {
+    if (quota <= 0.0) {
+      throw new RuntimeException("quota is not positive");
+    }
     return (long) Math.ceil((double) limiter.quotaWindowTicks / quota);
   }
 
@@ -104,7 +117,8 @@ class State {
     limiter.updateRetention(quotaId);
     synchronized (this) {
       // Adjust permits for current burst window
-      setBurstWindowValues(quota, limiter.currentTickSupplier.get(), permitsForBurstWindow, limiter);
+      setBurstWindowValues(
+          quota, limiter.currentTickSupplier.get(), permitsForBurstWindow, limiter);
     }
   }
 }

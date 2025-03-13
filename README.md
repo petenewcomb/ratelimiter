@@ -78,42 +78,87 @@ The rate limiter must maintain state for each unique quota ID (e.g., per user ac
 
 A denial-of-service attack, intentional or not, can poison the rate limiting state map with entries it must maintain to efficiently deny.  This makes essential the placement of a limit on the total number of entries the map will maintain, lest it grow to overly burden the garbage collector and eventually cause an out-of-memory exception.  When this limit is hit, the implementation will preferentially evict the least frequently used entries -- the ones it is least likely to see again anyway.
 
-All of this means that the amount of memory consumed per active quota is an important parameter to consider when configuring the rate limiter.  The below analysis shows that in a 64-bit JVM, each entry will consume 248 bytes + the size of the quota ID as expressed in Latin-1 or UTF-16.  Future work might reduce this overhead somewhat, for instance by collapsing the fields of the Quota object into the State object or using alternate implementation objects when certain features are not required.
+The amount of memory consumed per active quota is therefore an important parameter to consider when configuring the rate limiter. The below analysis shows that on the tested JVM (OpenJDK 21.0.6 amd64) [the Java Object Layout (JOL) tool](https://github.com/openjdk/jol) shows that each entry will consume 200 bytes + the size of the quota ID as expressed in Latin-1 or UTF-16.
 
-```elisp
-(+
-  88 ; map entry (see https://github.com/ben-manes/caffeine/wiki/Memory-overhead)
-
-  12 ; State object header
-   4 ; padding
-   8 ; private final long originTick;
-   8 ; private volatile long permitsForBurstWindow;
-   8 ; private volatile long burstWindowEndTick;
-   8 ; private volatile long retentionTicks;
-   4 ; (compressed reference) private final Quota quota;
-   4 ; (compressed reference) private final AtomicLong availablePermits = new AtomicLong();
-
-  12 ; AtomicLong object header
-   4 ; padding
-   8 ; the long itself
-
-  12 ; Quota object header
-   4 ; padding
-   8 ; private volatile double value;
-   8 ; private volatile long lastFetchStartTick = Long.MIN_VALUE;
-   1 ; private boolean fetchInProgress;
-   7 ; padding
-
-  12 ; String object (for key) header
-   4 ; private int hash;
-   1 ; private final byte coder;
-   1 ; private boolean hashIsZero;
-   2 ; padding
-   4 ; (compressed reference) private final byte[] value;
-
-  12 ; byte[] header
-   4 ; length
-  32 ; presumed average actual key size, assumed to be 32 latin-1 chars (e.g. a UUID) or 16 UTF-16 chars
-)
-280
+#### State Object Layout
 ```
+Quota ID java.lang.String object internals:
+OFF  SZ      TYPE DESCRIPTION               VALUE
+  0   8           (object header: mark)     0x0000000000000001 (non-biasable; age: 0)
+  8   4           (object header: class)    0x0000e740
+ 12   4       int String.hash               1666370984
+ 16   1      byte String.coder              0
+ 17   1   boolean String.hashIsZero         false
+ 18   2           (alignment/padding gap)   
+ 20   4    byte[] String.value              [116, 101, 115, 116, 45, 113, 117, 111, 116, 97, 45, 105, 100, 64, 101, 120, 97, 109, 112, 108, 101, 46, 99, 111, 109]
+Instance size: 24 bytes
+Space losses: 2 bytes internal + 0 bytes external = 2 bytes total
+
+Quota ID String inner [B object internals:
+OFF  SZ   TYPE DESCRIPTION               VALUE
+  0   8        (object header: mark)     0x0000000000000001 (non-biasable; age: 0)
+  8   4        (object header: class)    0x00002268
+ 12   4        (array length)            25
+ 16  25   byte [B.<elements>             N/A
+ 41   7        (object alignment gap)    
+Instance size: 48 bytes
+Space losses: 0 bytes internal + 7 bytes external = 7 bytes total
+
+Quota ID java.lang.String@56f0cc85d footprint:
+     COUNT       AVG       SUM   DESCRIPTION
+         1        48        48   [B
+         1        24        24   java.lang.String
+         2                  72   (total)
+```
+
+#### String Object Layout (Quota ID)
+```
+Quota ID java.lang.String object internals:
+OFF  SZ      TYPE DESCRIPTION               VALUE
+  0   8           (object header: mark)     0x0000000000000001 (non-biasable; age: 0)
+  8   4           (object header: class)    0x0000e740
+ 12   4       int String.hash               1666370984
+ 16   1      byte String.coder              0
+ 17   1   boolean String.hashIsZero         false
+ 18   2           (alignment/padding gap)   
+ 20   4    byte[] String.value              [116, 101, 115, 116, 45, 113, 117, 111, 116, 97, 45, 105, 100, 64, 101, 120, 97, 109, 112, 108, 101, 46, 99, 111, 109]
+Instance size: 24 bytes
+Space losses: 2 bytes internal + 0 bytes external = 2 bytes total
+
+Quota ID String inner [B object internals:
+OFF  SZ   TYPE DESCRIPTION               VALUE
+  0   8        (object header: mark)     0x0000000000000001 (non-biasable; age: 0)
+  8   4        (object header: class)    0x00002268
+ 12   4        (array length)            25
+ 16  25   byte [B.<elements>             N/A
+ 41   7        (object alignment gap)    
+Instance size: 48 bytes
+Space losses: 0 bytes internal + 7 bytes external = 7 bytes total
+
+Quota ID java.lang.String@56f0cc85d footprint:
+     COUNT       AVG       SUM   DESCRIPTION
+         1        48        48   [B
+         1        24        24   java.lang.String
+         2                  72   (total)
+```
+
+#### Per-Active-Quota Memory Calculation
+
+| Component | Size (bytes) | Description |
+|-----------|--------------|-------------|
+| Map entry | 88 | [Caffeine map entry overhead](https://github.com/ben-manes/caffeine/wiki/Memory-overhead) |
+| State object | 72 | Rate limiter state object |
+| ID String object | 72 | Quota ID string object (map key), including contained byte array |
+| Encoded ID string | -25 | Bytes for Latin-1 representation of example quota ID "test-quota-id@example.com" |
+| ID byte array padding | -7 | Extends byte array object for example ID to next 64-bit (8 byte) boundary |
+| *Total* | *200* | *Base memory overhead per quota ID* |
+
+#### Generating JOL Reports
+
+The Java Object Layout (JOL) reports are generated with `testObjectSize` in `RateLimiterTest.java`.  To regenerate:
+
+```bash
+./gradlew :ratelimiter:test --tests "org.example.ratelimiter.RateLimiterTest.testObjectSize"
+```
+
+The reports will be in `ratelimiter/build/test-results/test/TEST-org.example.ratelimiter.RateLimiterTest.xml`.

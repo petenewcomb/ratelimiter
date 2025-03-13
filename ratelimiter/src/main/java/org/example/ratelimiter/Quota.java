@@ -1,22 +1,17 @@
 package org.example.ratelimiter;
 
-import java.util.function.Function;
-import java.util.function.Supplier;
-import com.github.benmanes.caffeine.cache.Caffeine;
-import com.github.benmanes.caffeine.cache.Cache;
-import java.util.concurrent.CompletableFuture;
-
 class Quota {
   private volatile double value;
   private volatile long lastFetchStartTick = Long.MIN_VALUE;
   private boolean fetchInProgress;
 
-  Quota(final String quotaId, final State state, final RateLimiter limiter) {
+  void initializeQuota(final String quotaId, final State state, final RateLimiter limiter) {
     this.value = limiter.failsafeQuota;
     fetch(quotaId, state, limiter);
   }
 
-  double get(final String quotaId, final long currentTick, final State state, final RateLimiter limiter) {
+  double getQuota(
+      final String quotaId, final long currentTick, final State state, final RateLimiter limiter) {
     if (isStale(currentTick, limiter)) {
       fetch(quotaId, state, limiter);
     }
@@ -27,7 +22,8 @@ class Quota {
     return currentTick >= (lastFetchStartTick + limiter.quotaRefreshPeriodTicks);
   }
 
-  private synchronized void fetch(final String quotaId, final State state, final RateLimiter limiter) {
+  private synchronized void fetch(
+      final String quotaId, final State state, final RateLimiter limiter) {
     final var currentTick = limiter.currentTickSupplier.get();
     if (fetchInProgress || !isStale(currentTick, limiter)) {
       // Another thread is updating or has updated the quota while this one waited for the lock
@@ -36,7 +32,10 @@ class Quota {
     this.lastFetchStartTick = currentTick;
     this.fetchInProgress = true;
     try {
-      limiter.getQuotaById.apply(quotaId).whenComplete((quota, e) -> setQuota(quotaId, quota, e, state, limiter));
+      limiter
+          .getQuotaById
+          .apply(quotaId)
+          .whenComplete((quota, e) -> setQuota(quotaId, quota, e, state, limiter));
     } catch (final RuntimeException e) {
       // Can't be sure that setQuota will be called.
       this.fetchInProgress = false;
@@ -44,7 +43,12 @@ class Quota {
     }
   }
 
-  private synchronized void setQuota(final String quotaId, final Double value, final Throwable e, final State state, final RateLimiter limiter) {
+  private synchronized void setQuota(
+      final String quotaId,
+      final Double value,
+      final Throwable e,
+      final State state,
+      final RateLimiter limiter) {
     this.fetchInProgress = false;
     final var currentTick = limiter.currentTickSupplier.get();
     if (e != null) {
